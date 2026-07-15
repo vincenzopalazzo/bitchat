@@ -10,6 +10,7 @@
     "fetch-blog": "node scripts/fetch-blog.mjs",
     "build": "vite build",
     "preview": "vite preview",
+    "test": "node --test",
     "check": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json"
   },
   "devDependencies": {
