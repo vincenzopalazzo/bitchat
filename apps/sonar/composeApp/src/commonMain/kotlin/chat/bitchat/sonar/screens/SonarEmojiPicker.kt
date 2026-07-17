@@ -1,0 +1,566 @@
+package chat.bitchat.sonar.screens
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import chat.bitchat.sonar.SonarCore
+import chat.bitchat.sonar.SonarGifItem
+import chat.bitchat.sonar.SonarStickerItem
+import chat.bitchat.sonar.SonarStickerPack
+import chat.bitchat.sonar.decodeImageBitmap
+import chat.bitchat.sonar.normalizeStickerPackCoordinate
+import chat.bitchat.sonar.ui.SNEmptyState
+import chat.bitchat.sonar.ui.SNIcon
+import chat.bitchat.sonar.ui.SNIconName
+import chat.bitchat.sonar.ui.SNSectionLabel
+import chat.bitchat.sonar.ui.sonar
+
+internal fun shouldPreserveCachedStickerPacks(
+    hadCachedPacks: Boolean,
+    installedCoordinates: List<String>?,
+): Boolean = hadCachedPacks && installedCoordinates == null
+
+internal fun filterCachedStickerPacksByInstalledCoordinates(
+    packs: List<SonarStickerPack>,
+    installedCoordinates: List<String>,
+): List<SonarStickerPack> {
+    val installed = installedCoordinates.mapTo(mutableSetOf(), ::normalizeStickerPackCoordinate)
+    return packs.filter { normalizeStickerPackCoordinate(it.packCoordinate) in installed }
+}
+
+internal fun mergeRefreshedStickerPacks(
+    cachedPacks: List<SonarStickerPack>,
+    refreshedPacks: List<SonarStickerPack>,
+    installedCoordinates: List<String>,
+): List<SonarStickerPack> {
+    val cachedByCoordinate = cachedPacks.associateBy { normalizeStickerPackCoordinate(it.packCoordinate) }
+    val refreshedByCoordinate = refreshedPacks.associateBy { normalizeStickerPackCoordinate(it.packCoordinate) }
+    val added = mutableSetOf<String>()
+    return installedCoordinates.mapNotNull { coordinate ->
+        val key = normalizeStickerPackCoordinate(coordinate)
+        if (!added.add(key)) null else refreshedByCoordinate[key] ?: cachedByCoordinate[key]
+    }
+}
+
+private enum class PickerTab { Emoji, Gif, Sticker }
+
+private val frequentEmojis = listOf("👍", "❤️", "😂", "🔥", "🙏", "👏", "🎉", "👀", "💯", "⚡")
+
+private data class EmojiCategory(val name: String, val emojis: List<String>)
+
+private val emojiCategories = listOf(
+    EmojiCategory("Smileys", listOf(
+        "😀", "😃", "😄", "😁", "😆", "😅", "🤣", "😂", "🙂", "🙃",
+        "😉", "😊", "😇", "🥰", "😍", "🤩", "😘", "😗", "😚", "😙",
+        "🥲", "😋", "😛", "😜", "🤪", "😝", "🤑", "🤗", "🤭", "🫢",
+        "🤫", "🤔", "🫡", "🤐", "🤨", "😐", "😑", "😶", "🫥", "😏",
+        "😒", "🙄", "😬", "🤥", "😌", "😔", "😪", "🤤", "😴", "😷",
+    )),
+    EmojiCategory("People", listOf(
+        "👋", "🤚", "🖐️", "✋", "🖖", "🫱", "🫲", "🫳", "🫴", "👌",
+        "🤌", "🤏", "✌️", "🤞", "🫰", "🤟", "🤘", "🤙", "👈", "👉",
+        "👆", "🖕", "👇", "☝️", "🫵", "👍", "👎", "✊", "👊", "🤛",
+        "🤜", "👏", "🙌", "🫶", "👐", "🤲", "🤝", "🙏", "✍️", "💅",
+        "🤳", "💪", "🦾", "🦿", "🦵", "🦶", "👂", "🦻", "👃", "🧠",
+    )),
+    EmojiCategory("Animals", listOf(
+        "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐻‍❄️", "🐨",
+        "🐯", "🦁", "🐮", "🐷", "🐸", "🐵", "🙈", "🙉", "🙊", "🐒",
+        "🐔", "🐧", "🐦", "🐤", "🐣", "🐥", "🦆", "🦅", "🦉", "🦇",
+        "🐺", "🐗", "🐴", "🦄", "🐝", "🪱", "🐛", "🦋", "🐌", "🐞",
+        "🐜", "🪰", "🪲", "🪳", "🦟", "🦗", "🕷️", "🐢", "🐍", "🦎",
+    )),
+    EmojiCategory("Food", listOf(
+        "🍏", "🍎", "🍐", "🍊", "🍋", "🍌", "🍉", "🍇", "🍓", "🫐",
+        "🍈", "🍒", "🍑", "🥭", "🍍", "🥥", "🥝", "🍅", "🍆", "🥑",
+        "🥦", "🥬", "🥒", "🌶️", "🫑", "🌽", "🥕", "🫒", "🧄", "🧅",
+        "🥔", "🍠", "🥐", "🍞", "🥖", "🥨", "🧀", "🥚", "🍳", "🧈",
+        "🥞", "🧇", "🥓", "🥩", "🍗", "🍖", "🌭", "🍔", "🍟", "🍕",
+    )),
+    EmojiCategory("Travel", listOf(
+        "🚗", "🚕", "🚙", "🚌", "🚎", "🏎️", "🚓", "🚑", "🚒", "🚐",
+        "🛻", "🚚", "🚛", "🚜", "🏍️", "🛵", "🚲", "🛴", "🛹", "🛼",
+        "✈️", "🛫", "🛬", "🪂", "💺", "🚀", "🛸", "🚁", "⛵", "🚤",
+        "🗺️", "🗻", "🏔️", "⛰️", "🌋", "🏕️", "🏖️", "🏜️", "🏝️", "🏞️",
+        "🌅", "🌄", "🌠", "🎇", "🎆", "🌇", "🌆", "🏙️", "🌃", "🌌",
+    )),
+    EmojiCategory("Activities", listOf(
+        "⚽", "🏀", "🏈", "⚾", "🥎", "🎾", "🏐", "🏉", "🥏", "🎱",
+        "🪀", "🏓", "🏸", "🏒", "🏑", "🥍", "🏏", "🪃", "🥅", "⛳",
+        "🪁", "🏹", "🎣", "🤿", "🥊", "🥋", "🎽", "🛹", "🛼", "⛸️",
+        "🥌", "🎿", "⛷️", "🏂", "🪂", "🏋️", "🤸", "🤺", "⛹️", "🤾",
+        "🏌️", "🏇", "🧘", "🏄", "🏊", "🤽", "🚣", "🧗", "🚴", "🚵",
+    )),
+    EmojiCategory("Objects", listOf(
+        "⌚", "📱", "💻", "⌨️", "🖥️", "🖨️", "🖱️", "🖲️", "🕹️", "🗜️",
+        "💾", "💿", "📀", "📼", "📷", "📸", "📹", "🎥", "📽️", "🎞️",
+        "📞", "☎️", "📟", "📠", "📺", "📻", "🎙️", "🎚️", "🎛️", "🧭",
+        "⏱️", "⏲️", "⏰", "🕰️", "⌛", "⏳", "📡", "🔋", "🪫", "🔌",
+        "💡", "🔦", "🕯️", "🪔", "🧯", "🗑️", "🛢️", "💸", "💵", "💴",
+    )),
+    EmojiCategory("Symbols", listOf(
+        "❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "🤍", "🤎", "💔",
+        "❤️‍🔥", "❤️‍🩹", "💕", "💞", "💓", "💗", "💖", "💘", "💝", "💟",
+        "☮️", "✝️", "☪️", "🕉️", "☸️", "✡️", "🔯", "🕎", "☯️", "☦️",
+        "♈", "♉", "♊", "♋", "♌", "♍", "♎", "♏", "♐", "♑",
+        "♒", "♓", "⛎", "🔀", "🔁", "🔂", "▶️", "⏩", "⏭️", "⏯️",
+    )),
+    EmojiCategory("Flags", listOf(
+        "🏁", "🚩", "🎌", "🏴", "🏳️", "🏳️‍🌈", "🏳️‍⚧️", "🏴‍☠️", "🇺🇸", "🇬🇧",
+        "🇫🇷", "🇩🇪", "🇯🇵", "🇰🇷", "🇨🇳", "🇮🇹", "🇪🇸", "🇧🇷", "🇮🇳", "🇷🇺",
+        "🇨🇦", "🇦🇺", "🇲🇽", "🇦🇷", "🇨🇴", "🇳🇬", "🇿🇦", "🇪🇬", "🇹🇷", "🇸🇦",
+    )),
+)
+
+@Composable
+fun SonarEmojiPicker(
+    onEmoji: (String) -> Unit,
+    onGif: (SonarGifItem) -> Unit,
+    onSticker: (SonarStickerItem, String) -> Unit,
+    loadStickerPack: suspend (String, String, List<String>) -> SonarStickerPack? = { author, identifier, relays ->
+        runCatching { SonarCore.fetchStickerPack(author, identifier, relays) }.getOrNull()
+    },
+    loadStickerImage: suspend (String, String) -> ByteArray? = { url, expectedSha256 ->
+        runCatching { SonarCore.fetchStickerImage(url, expectedSha256) }.getOrNull()
+    },
+    fetchInstalledPacks: suspend () -> List<String>? = {
+        runCatching { SonarCore.fetchInstalledPacks() }.getOrNull()
+    },
+    initialStickerPacks: List<SonarStickerPack> = emptyList(),
+    onStickerPacksLoaded: (List<SonarStickerPack>) -> Unit = {},
+    onClose: () -> Unit,
+) {
+    val s = sonar
+    var tab by remember { mutableStateOf(PickerTab.Emoji) }
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .height(320.dp)
+            .clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp))
+            .background(s.surface)
+    ) {
+        Box(
+            Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 6.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                Modifier
+                    .width(40.dp)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(s.surface2)
+            )
+        }
+
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            PickerTabPill(SNIconName.Smile, tab == PickerTab.Emoji) { tab = PickerTab.Emoji }
+            PickerTabPill(SNIconName.Gif, tab == PickerTab.Gif) { tab = PickerTab.Gif }
+            PickerTabPill(SNIconName.Sticker, tab == PickerTab.Sticker) { tab = PickerTab.Sticker }
+        }
+
+        when (tab) {
+            PickerTab.Emoji -> EmojiTabContent(onEmoji)
+            PickerTab.Gif -> GifTabContent()
+            PickerTab.Sticker -> StickerTabContent(
+                onSticker,
+                loadStickerPack,
+                loadStickerImage,
+                fetchInstalledPacks,
+                initialStickerPacks,
+                onStickerPacksLoaded,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PickerTabPill(icon: SNIconName, selected: Boolean, onClick: () -> Unit) {
+    val s = sonar
+    Box(
+        Modifier
+            .height(40.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (selected) s.accentFill else s.surface2)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        SNIcon(icon, 20.dp, if (selected) s.onAccent else s.text2, weight = 2f)
+    }
+}
+
+@Composable
+private fun ColumnScope.EmojiTabContent(onEmoji: (String) -> Unit) {
+    val s = sonar
+    var search by remember { mutableStateOf("") }
+    var selectedCategory by remember { mutableStateOf(0) }
+
+    SearchField(search, "Search emoji") { search = it }
+
+    if (search.isBlank()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 14.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            emojiCategories.forEachIndexed { index, cat ->
+                CategoryLabel(cat.name, index == selectedCategory) { selectedCategory = index }
+            }
+        }
+    }
+
+    val displayEmojis = if (search.isBlank()) {
+        emojiCategories[selectedCategory].emojis
+    } else {
+        emojiCategories.flatMap { it.emojis }
+    }
+
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(8),
+        modifier = Modifier.fillMaxWidth().weight(1f).padding(horizontal = 6.dp),
+    ) {
+        if (search.isBlank() && selectedCategory == 0) {
+            item(span = { GridItemSpan(8) }) {
+                Text(
+                    "FREQUENTLY USED",
+                    color = s.text3,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.6.sp,
+                    modifier = Modifier.padding(start = 8.dp, top = 6.dp, bottom = 2.dp)
+                )
+            }
+            items(frequentEmojis) { emoji ->
+                EmojiCell(emoji, onEmoji)
+            }
+            item(span = { GridItemSpan(8) }) {
+                Text(
+                    emojiCategories[0].name.uppercase(),
+                    color = s.text3,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.6.sp,
+                    modifier = Modifier.padding(start = 8.dp, top = 8.dp, bottom = 2.dp)
+                )
+            }
+        }
+        items(displayEmojis) { emoji ->
+            EmojiCell(emoji, onEmoji)
+        }
+    }
+}
+
+@Composable
+private fun EmojiCell(emoji: String, onEmoji: (String) -> Unit) {
+    Box(
+        Modifier
+            .size(42.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { onEmoji(emoji) },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(emoji, fontSize = 24.sp)
+    }
+}
+
+@Composable
+private fun CategoryLabel(name: String, selected: Boolean, onClick: () -> Unit) {
+    val s = sonar
+    Column(
+        Modifier.clickable(onClick = onClick).padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            name,
+            color = if (selected) s.accent else s.text3,
+            fontSize = 13.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+        )
+        Spacer(Modifier.height(3.dp))
+        Box(
+            Modifier
+                .width(24.dp)
+                .height(2.dp)
+                .clip(RoundedCornerShape(1.dp))
+                .background(if (selected) s.accent else s.surface)
+        )
+    }
+}
+
+@Composable
+private fun ColumnScope.GifTabContent() {
+    val s = sonar
+    var search by remember { mutableStateOf("") }
+
+    SearchField(search, "Search GIFs") { search = it }
+
+    SNSectionLabel("Trending")
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .weight(1f)
+            .padding(horizontal = 14.dp)
+            .verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                repeat(3) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(120.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(s.surface2)
+                    )
+                }
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                repeat(3) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(120.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(s.surface2)
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(24.dp))
+
+        SNIcon(SNIconName.Gif, 28.dp, s.text3)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "GIF search coming soon",
+            color = s.text2,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium
+        )
+        Text(
+            "Nostr relay integration in progress",
+            color = s.text3,
+            fontSize = 12.sp
+        )
+
+        Spacer(Modifier.height(16.dp))
+    }
+}
+
+@Composable
+private fun ColumnScope.StickerTabContent(
+    onSticker: (SonarStickerItem, String) -> Unit,
+    loadStickerPack: suspend (String, String, List<String>) -> SonarStickerPack?,
+    loadStickerImage: suspend (String, String) -> ByteArray?,
+    fetchInstalledPacks: suspend () -> List<String>?,
+    initialStickerPacks: List<SonarStickerPack>,
+    onStickerPacksLoaded: (List<SonarStickerPack>) -> Unit,
+) {
+    val s = sonar
+    var packs by remember { mutableStateOf(initialStickerPacks) }
+    var loading by remember { mutableStateOf(initialStickerPacks.isEmpty()) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        // ChatScreen owns the loaded packs, so closing/reopening the tray can
+        // paint immediately while app-level caches refresh metadata behind it.
+        val hadCachedPacks = packs.isNotEmpty()
+        if (hadCachedPacks) {
+            loading = false
+        }
+        val coordinates = try { fetchInstalledPacks() } catch (_: Throwable) { null }
+        if (coordinates == null) {
+            if (!shouldPreserveCachedStickerPacks(hadCachedPacks, coordinates)) {
+                error = "Failed to load sticker packs"
+            }
+            loading = false
+            return@LaunchedEffect
+        }
+        val filteredCachedPacks = filterCachedStickerPacksByInstalledCoordinates(packs, coordinates)
+        if (filteredCachedPacks != packs) {
+            packs = filteredCachedPacks
+            onStickerPacksLoaded(filteredCachedPacks)
+        }
+        val loaded = mutableListOf<SonarStickerPack>()
+        for (coord in coordinates) {
+            val parts = coord.split(":", limit = 3)
+            if (parts.size != 3) continue
+            loadStickerPack(parts[1], parts[2], emptyList())
+                ?.takeIf { it.stickers.isNotEmpty() }
+                ?.let { loaded += it }
+        }
+        val merged = mergeRefreshedStickerPacks(filteredCachedPacks, loaded, coordinates)
+        if (merged.isNotEmpty()) {
+            packs = merged
+            onStickerPacksLoaded(merged)
+            error = null
+        } else if (coordinates.isEmpty()) {
+            packs = emptyList()
+            onStickerPacksLoaded(emptyList())
+            error = null
+        } else if (packs.isEmpty()) {
+            error = "Failed to load sticker packs"
+        }
+        loading = false
+    }
+
+    if (loading) {
+        Column(
+            Modifier.fillMaxWidth().weight(1f),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            androidx.compose.material3.CircularProgressIndicator(
+                color = s.accent,
+                strokeWidth = 2.dp,
+                modifier = Modifier.size(24.dp),
+            )
+            Spacer(Modifier.height(8.dp))
+            Text("Loading stickers…", color = s.text3, fontSize = 13.sp)
+        }
+    } else if (error != null) {
+        SNEmptyState(
+            icon = SNIconName.Sticker,
+            title = "Couldn't load stickers",
+            desc = error ?: "Try again later",
+        )
+        Spacer(Modifier.weight(1f))
+    } else if (packs.isEmpty()) {
+        SNEmptyState(
+            icon = SNIconName.Sticker,
+            title = "No sticker packs installed",
+            desc = "Install a pack from a shared sticker link to use it here.",
+        )
+        Spacer(Modifier.weight(1f))
+    } else {
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(4),
+            modifier = Modifier.fillMaxWidth().weight(1f).padding(horizontal = 8.dp),
+        ) {
+            for (p in packs) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    SNSectionLabel(p.title)
+                }
+                items(p.stickers) { sticker ->
+                    StickerCell(sticker, loadStickerImage) { onSticker(sticker, p.packCoordinate) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StickerCell(
+    sticker: SonarStickerItem,
+    loadStickerImage: suspend (String, String) -> ByteArray?,
+    onClick: () -> Unit,
+) {
+    var imageBytes by remember(sticker.url) { mutableStateOf<ByteArray?>(null) }
+    var failed by remember(sticker.url) { mutableStateOf(false) }
+    LaunchedEffect(sticker.url) {
+        failed = false
+        imageBytes = loadStickerImage(sticker.url, sticker.sha256)
+        failed = imageBytes == null
+    }
+    Box(
+        Modifier
+            .size(72.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        val image = remember(imageBytes) {
+            imageBytes?.let { runCatching { decodeImageBitmap(it) }.getOrNull() }
+        }
+        val displayFailed = failed || (imageBytes != null && image == null)
+        if (image != null) {
+            androidx.compose.foundation.Image(
+                bitmap = image,
+                contentDescription = sticker.alt ?: sticker.shortcode,
+                modifier = Modifier.size(60.dp),
+            )
+        } else if (displayFailed) {
+            Text(
+                sticker.emoji ?: sticker.shortcode,
+                color = sonar.text3,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(6.dp),
+            )
+        } else {
+            Box(Modifier.size(60.dp).clip(RoundedCornerShape(8.dp)).background(sonar.surface2))
+        }
+    }
+}
+
+@Composable
+private fun SearchField(value: String, placeholder: String, onValueChange: (String) -> Unit) {
+    val s = sonar
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(s.surface2)
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+    ) {
+        if (value.isEmpty()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SNIcon(SNIconName.Search, 15.dp, s.text3, weight = 2f)
+                Spacer(Modifier.width(8.dp))
+                Text(placeholder, color = s.text3, fontSize = 15.sp)
+            }
+        }
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            textStyle = TextStyle(color = s.text, fontSize = 15.sp),
+            cursorBrush = androidx.compose.ui.graphics.SolidColor(s.accent),
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(start = 23.dp)
+        )
+    }
+}

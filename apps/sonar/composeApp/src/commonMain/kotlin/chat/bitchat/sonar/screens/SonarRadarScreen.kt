@@ -1,0 +1,571 @@
+package chat.bitchat.sonar.screens
+
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.drawscope.rotate as drawRotate
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import chat.bitchat.sonar.SonarAppState
+import chat.bitchat.sonar.ui.SNDot
+import chat.bitchat.sonar.ui.SNIcon
+import chat.bitchat.sonar.ui.SNIconButton
+import chat.bitchat.sonar.ui.SNIconName
+import chat.bitchat.sonar.ui.SonarAvatar
+import chat.bitchat.sonar.ui.sonar
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
+
+/** RSSI → 1..4 signal strength (BLE: ~-40 close, ~-95 far). */
+internal fun rssiBars(rssi: Int): Int = when {
+    rssi >= -55 -> 4
+    rssi >= -70 -> 3
+    rssi >= -85 -> 2
+    else -> 1
+}
+
+internal fun rssiLabel(rssi: Int): String = when (rssiBars(rssi)) {
+    4 -> "Very close"
+    3 -> "Nearby"
+    2 -> "In range"
+    else -> "Far"
+}
+
+/** RSSI → radar ring radius. Design rings sit at r 66/112/158 in a 348 field:
+ *  a strong signal (~-40) lands on the inner ring, a weak one (~-95) near the
+ *  outer ring — the design's `p.r` placement, derived from live signal. */
+internal fun rssiRadius(rssi: Int): Float {
+    val t = ((-40f - rssi) / 55f).coerceIn(0f, 1f)
+    return 66f + t * (150f - 66f)
+}
+
+@Composable
+fun SonarRadarScreen(state: SonarAppState) {
+    val s = sonar
+    var listMode by remember { mutableStateOf(false) }
+    var card by remember { mutableStateOf<chat.bitchat.sonar.MeshPeer?>(null) }
+    var unifyCard by remember { mutableStateOf<chat.bitchat.sonar.unify.UnifyPeer?>(null) }
+    var paySheet by remember { mutableStateOf<chat.bitchat.sonar.unify.UnifyPeer?>(null) }
+    val unify = state.unifyPeers
+
+    DisposableEffect(state) {
+        state.nearbyAppeared()
+        onDispose { state.nearbyDisappeared() }
+    }
+
+    Column(Modifier.fillMaxSize().background(s.bg)) {
+        // bc-header: back + "Sonar" + status subtitle (NavHeader, hairline=false)
+        Row(
+            Modifier.fillMaxWidth().padding(start = 6.dp, end = 12.dp, top = 10.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            SNIconButton(SNIconName.Back, onClick = { state.back() })
+            Column {
+                Text("Sonar", color = s.text, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 1.dp)) {
+                    SNDot(if (state.bleDiscoveryRestricted) s.text3 else s.green, 7.dp)
+                    Spacer(Modifier.width(5.dp))
+                    Text(state.radarDiscoveryStatusLine, color = s.text2, fontSize = 12.sp)
+                }
+            }
+        }
+
+        if (state.bleDiscoveryRestricted) {
+            DiscoveryNotice(state)
+        }
+
+        // sn-seg segmented control: Radar | List
+        Row(
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 4.dp)
+                .clip(RoundedCornerShape(11.dp)).background(s.surface2).padding(3.dp)
+        ) {
+            SegButton("Radar", !listMode, Modifier.weight(1f), icon = {
+                SNIcon(SNIconName.Rings, 15.dp, it, weight = 2f)
+            }) { listMode = false }
+            SegButton("List", listMode, Modifier.weight(1f), icon = {
+                SNXIcon(SNXIconName.ListGlyph, 15.dp, it, weight = 2f)
+            }) { listMode = true }
+        }
+
+        if (listMode) {
+            if (state.meshPeers.isEmpty() && unify.isEmpty()) ListEmpty(state)
+            else LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 40.dp)) {
+                if (state.meshPeers.isNotEmpty()) {
+                    item { chat.bitchat.sonar.ui.SNSectionLabel("In range · Bluetooth") }
+                }
+                items(state.meshPeers, key = { it.id }) { p ->
+                    val pid = p.id.removePrefix("mesh:")
+                    PeerRow(
+                        p, p.sonar,
+                        favorite = state.isFavorite(pid),
+                        mutual = state.isMutualFavorite(pid),
+                        divider = p !== state.meshPeers.last(),
+                    ) { card = p }
+                }
+                if (unify.isNotEmpty()) {
+                    item { chat.bitchat.sonar.ui.SNSectionLabel("Unify users nearby") }
+                    items(unify, key = { it.id }) { p ->
+                        UnifyPeerRow(p, divider = p !== unify.last()) { unifyCard = p }
+                    }
+                }
+            }
+        } else {
+            // sn-radarwrap
+            Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Spacer(Modifier.weight(1f))
+                RadarField(
+                    state.nick.ifBlank { "you" }, state.meshPeers, unify,
+                    onMeshTap = { card = it }, onUnifyTap = { unifyCard = it },
+                )
+                // sn-caption
+                Text(
+                    if (state.meshPeers.isEmpty() && unify.isEmpty()) {
+                        if (state.bleDiscoveryRestricted) "New people are paused" else "Looking for people around you…"
+                    } else {
+                        "Tap someone to chat"
+                    },
+                    color = s.text3, fontSize = 12.5.sp, modifier = Modifier.padding(top = 4.dp)
+                )
+                // sn-legend
+                Row(Modifier.padding(top = 12.dp, bottom = 2.dp), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                    Legend(s.accent, "nearby · Bluetooth")
+                    Legend(s.net, "far · internet")
+                    if (unify.isNotEmpty()) Legend(s.goldFill, "Unify · pay only")
+                }
+                Spacer(Modifier.weight(1f))
+            }
+        }
+    }
+
+    card?.let { p ->
+        val pid = p.id.removePrefix("mesh:")
+        // .sn-peercard: avatar · name · hint · Message [· Send sats]
+        PeerCardShell(onClose = { card = null }) {
+            SonarAvatar(p.name, 44.dp, presence = true)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(p.name, color = s.text, fontSize = 15.5.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                Text(
+                    "${rssiLabel(p.rssi)} · over Bluetooth",
+                    color = s.text2, fontSize = 12.sp, maxLines = 1,
+                    modifier = Modifier.padding(top = 1.dp),
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            SNPill("Message", primary = false, onClick = { card = null; state.openDm(pid, p.name) })
+            // "Send sats" for peers we have a White Noise account for (a rich 0x53
+            // announce ⇒ an npub we can pay). NOT a "Sonar-only" tier: the actual
+            // ⚡PAY rides the chat (PayLine over Bluetooth in range, White Noise out
+            // of range), so paying a met contact later over the internet already
+            // works — this radar pill is just the in-range shortcut.
+            if (p.sonar) {
+                Spacer(Modifier.width(8.dp))
+                SNPill("Send sats", primary = true, onClick = { card = null; state.openDm(pid, p.name, pay = true) })
+            }
+        }
+    }
+    unifyCard?.let { p ->
+        PeerCardShell(onClose = { unifyCard = null }) {
+            SonarAvatar(p.name, 44.dp, presence = true, seed = p.id)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(p.name, color = s.text, fontSize = 15.5.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                Text(
+                    "${rssiLabel(p.rssi)} · Unify Wallet",
+                    color = s.text2, fontSize = 12.sp, maxLines = 1,
+                    modifier = Modifier.padding(top = 1.dp),
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            SNPill("Send sats", primary = true, gold = true, onClick = { unifyCard = null; paySheet = p })
+        }
+    }
+    paySheet?.let { p ->
+        chat.bitchat.sonar.PaySheet(
+            peerName = p.name,
+            balanceSats = state.walletBalanceSats(),
+            mesh = false,
+            fiatOf = { state.fiatOrNull(it) },
+            onSend = { state.sendSatsToUnify(p.id, it); paySheet = null },
+            onClose = { paySheet = null },
+        )
+    }
+}
+
+@Composable
+private fun DiscoveryNotice(state: SonarAppState) {
+    val s = sonar
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(14.dp)).background(s.surface)
+            .border(1.dp, s.hairline, RoundedCornerShape(14.dp))
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SNIcon(SNIconName.Rings, 18.dp, s.accentDeep, weight = 2.1f)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                if (state.batterySaving) "New people paused" else "New people are hidden",
+                color = s.text,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                if (state.batterySaving) {
+                    "Battery saving is on. People from existing chats can still reconnect."
+                } else {
+                    "Only people from existing chats appear until you turn discovery back on."
+                },
+                color = s.text2,
+                fontSize = 12.5.sp,
+                lineHeight = 16.sp,
+            )
+        }
+        if (!state.batterySaving) {
+            Spacer(Modifier.width(10.dp))
+            SNPill("Turn on", primary = true) { state.setBleDiscoverNewPeople(true) }
+        }
+    }
+}
+
+/** ConvRow with a bc-signal sub line — design list rows: avatar 44 + title
+ *  16.5/650 (+heart extra) + bars-in-sub "hint · detail", hairline inset 72. */
+@Composable
+private fun PeerRow(
+    p: chat.bitchat.sonar.MeshPeer,
+    isSonar: Boolean,
+    favorite: Boolean,
+    mutual: Boolean,
+    divider: Boolean,
+    onClick: () -> Unit,
+) {
+    val s = sonar
+    Column {
+        Row(
+            Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            SonarAvatar(p.name, 44.dp, presence = true)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(p.name, color = s.text, fontSize = 16.5.sp, fontWeight = FontWeight.SemiBold)
+                    if (favorite) {
+                        Spacer(Modifier.width(5.dp))
+                        SNIcon(SNIconName.Heart, 14.dp, s.goldFill, weight = 2.1f)
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                    SignalBars((rssiBars(p.rssi) - 1).coerceAtLeast(1), s.green)
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        rssiLabel(p.rssi) + " · " +
+                            (if (mutual) "mutual favorite" else if (isSonar) "Sonar" else "bitchat"),
+                        color = s.text2, fontSize = 13.5.sp,
+                    )
+                }
+            }
+        }
+        if (divider) Box(Modifier.fillMaxWidth().padding(start = 72.dp).height(1.dp).background(s.hairline))
+    }
+}
+
+/** bc-bars: 3 stepped bars (4/7.5/11 × 3), [filled] in [color], rest hairline. */
+@Composable
+private fun SignalBars(filled: Int, color: Color) {
+    val s = sonar
+    Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        listOf(4.dp, 7.5.dp, 11.dp).forEachIndexed { i, h ->
+            Box(
+                Modifier.width(3.dp).height(h).clip(RoundedCornerShape(1.5.dp))
+                    .background(if (i < filled) color else s.hairline)
+            )
+        }
+    }
+}
+
+/** The design's `.sn-peercard` — a compact card that floats over the bottom of
+ *  the radar when you tap a peer. Tapping outside dismisses it; the radar stays
+ *  visible (no scrim). */
+@Composable
+private fun PeerCardShell(onClose: () -> Unit, content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit) {
+    val s = sonar
+    Box(
+        Modifier.fillMaxSize().clickable(
+            interactionSource = remember { MutableInteractionSource() }, indication = null,
+            onClick = onClose,
+        ),
+        contentAlignment = Alignment.BottomCenter,
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, bottom = 38.dp)
+                .shadow(14.dp, RoundedCornerShape(18.dp))
+                .clip(RoundedCornerShape(18.dp))
+                .background(s.surface)
+                .border(1.dp, s.hairline, RoundedCornerShape(18.dp))
+                .clickable(  // swallow taps on the card itself
+                    interactionSource = remember { MutableInteractionSource() }, indication = null,
+                    onClick = {},
+                )
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            content = content,
+        )
+    }
+}
+
+/** Pill button matching the design `.pf-smallbtn` (and iOS `SNSmallButton`). */
+@Composable
+private fun SNPill(label: String, primary: Boolean, gold: Boolean = false, onClick: () -> Unit) {
+    val s = sonar
+    val bg = when {
+        primary && gold -> s.goldFill
+        primary -> s.accentFill
+        else -> s.surface2
+    }
+    val fg = when {
+        primary && gold -> s.onGold
+        primary -> s.onAccent
+        else -> s.text
+    }
+    Box(
+        Modifier.clip(RoundedCornerShape(999.dp))
+            .background(bg)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = fg, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun UnifyPeerRow(p: chat.bitchat.sonar.unify.UnifyPeer, divider: Boolean, onClick: () -> Unit) {
+    val s = sonar
+    Column {
+        Row(
+            Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            SonarAvatar(p.name, 44.dp, presence = true, seed = p.id)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(p.name, color = s.text, fontSize = 16.5.sp, fontWeight = FontWeight.SemiBold)
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                    SignalBars((rssiBars(p.rssi) - 1).coerceAtLeast(1), s.goldFill)
+                    Spacer(Modifier.width(6.dp))
+                    Text("${rssiLabel(p.rssi)} · Unify, pay only", color = s.text2, fontSize = 13.5.sp)
+                }
+            }
+        }
+        if (divider) Box(Modifier.fillMaxWidth().padding(start = 72.dp).height(1.dp).background(s.hairline))
+    }
+}
+
+@Composable
+private fun SegButton(
+    label: String,
+    selected: Boolean,
+    modifier: Modifier,
+    icon: @Composable (Color) -> Unit,
+    onClick: () -> Unit,
+) {
+    val s = sonar
+    Row(
+        modifier.clip(RoundedCornerShape(8.5.dp))
+            .background(if (selected) s.surface else Color.Transparent)
+            .clickable(onClick = onClick).padding(vertical = 7.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        icon(if (selected) s.text else s.text2)
+        Spacer(Modifier.width(6.dp))
+        Text(label, color = if (selected) s.text else s.text2, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun Legend(color: Color, label: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        SNDot(color, 8.dp)
+        Spacer(Modifier.width(6.dp))
+        Text(label, color = sonar.text2, fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun ListEmpty(state: SonarAppState) {
+    val s = sonar
+    Column(
+        Modifier.fillMaxSize().padding(top = 80.dp, start = 24.dp, end = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        SNIcon(SNIconName.Rings, 26.dp, s.text3)
+        Spacer(Modifier.height(10.dp))
+        Text(
+            if (state.bleDiscoveryRestricted) "New people are paused" else "Nobody in range yet",
+            color = s.text2,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            if (state.bleDiscoveryRestricted) {
+                "People from existing chats can still reconnect. Use the control above to understand or change discovery."
+            } else {
+                "Keep Sonar open while you move around — people appear here as soon as Bluetooth finds them."
+            },
+            color = s.text3, fontSize = 13.sp, lineHeight = 18.sp
+        )
+    }
+}
+
+@Composable
+private fun RadarField(
+    nick: String,
+    peers: List<chat.bitchat.sonar.MeshPeer>,
+    unify: List<chat.bitchat.sonar.unify.UnifyPeer> = emptyList(),
+    onMeshTap: (chat.bitchat.sonar.MeshPeer) -> Unit = {},
+    onUnifyTap: (chat.bitchat.sonar.unify.UnifyPeer) -> Unit = {},
+) {
+    val s = sonar
+    val transition = rememberInfiniteTransition(label = "radar")
+    val sweep by transition.animateFloat(
+        0f, 360f, infiniteRepeatable(tween(4500, easing = LinearEasing), RepeatMode.Restart), label = "sweep"
+    )
+    val pulse by transition.animateFloat(
+        0f, 1f, infiniteRepeatable(tween(2600, easing = LinearEasing), RepeatMode.Restart), label = "pulse"
+    )
+
+    Box(Modifier.size(348.dp), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.fillMaxSize()) {
+            val c = size.minDimension / 2f
+            val k = size.minDimension / 348f
+            // solid rings
+            for (r in listOf(66f, 112f, 158f)) {
+                drawCircle(s.radarRing, radius = r * k, center = Offset(c, c), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1f))
+            }
+            // dotted rings
+            for (r in listOf(40f, 88f, 134f, 170f)) {
+                val n = ((2 * PI * r) / 17).toInt()
+                for (i in 0 until n) {
+                    val a = i.toDouble() / n * 2 * PI
+                    drawCircle(
+                        s.radarDot, radius = 1.2f * k,
+                        center = Offset(c + (r * k * cos(a)).toFloat(), c + (r * k * sin(a)).toFloat())
+                    )
+                }
+            }
+            // sweep (rotating sweep gradient)
+            drawRotate(sweep, pivot = Offset(c, c)) {
+                drawCircle(
+                    brush = Brush.sweepGradient(
+                        0.0f to Color.Transparent,
+                        0.79f to Color.Transparent,
+                        0.92f to s.sweepSoft,
+                        0.99f to s.sweep,
+                        1.0f to Color.Transparent,
+                        center = Offset(c, c)
+                    ),
+                    radius = c, center = Offset(c, c)
+                )
+            }
+            // expanding pulses (two, offset by half)
+            for (ph in listOf(pulse, (pulse + 0.5f) % 1f)) {
+                val eased = 1f - (1f - ph) * (1f - ph)
+                val scale = 0.7f + (2.4f - 0.7f) * eased
+                drawCircle(
+                    s.accent.copy(alpha = 0.55f * (1f - eased)),
+                    radius = 35f * k * scale, center = Offset(c, c),
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f)
+                )
+            }
+        }
+        // mesh peer nodes: angle deterministic per peer, radius from live RSSI
+        // (strong signal → inner ring, weak → outer ring, like the design's p.r).
+        peers.forEach { p ->
+            val ang = (chat.bitchat.sonar.ui.snHash(p.id) % 360).toDouble() * PI / 180.0
+            val radius = rssiRadius(p.rssi)
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.align(Alignment.Center).offset(
+                    x = (radius * cos(ang)).dp, y = (radius * sin(ang)).dp
+                ).clickable(
+                    interactionSource = remember { MutableInteractionSource() }, indication = null,
+                ) { onMeshTap(p) }
+            ) {
+                SonarAvatar(p.name, 44.dp, presence = true)
+                Spacer(Modifier.height(4.dp))
+                Box(Modifier.clip(RoundedCornerShape(8.dp)).background(s.bg).padding(horizontal = 7.dp, vertical = 1.dp)) {
+                    Text(p.name, color = s.text2, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                }
+            }
+        }
+        // Unify users on the OUTER ring (payments-only), tappable, gold-labeled.
+        unify.forEachIndexed { i, p ->
+            val ang = (chat.bitchat.sonar.ui.snHash(p.id) % 360).toDouble() * PI / 180.0
+            val radius = 150f + (i % 2) * 18f
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.align(Alignment.Center)
+                    .offset(x = (radius * cos(ang)).dp, y = (radius * sin(ang)).dp)
+                    .clickable { onUnifyTap(p) }
+            ) {
+                SonarAvatar(p.name, 36.dp, presence = true, seed = p.id)
+                Spacer(Modifier.height(4.dp))
+                Box(Modifier.clip(RoundedCornerShape(8.dp)).background(s.goldSoft).padding(horizontal = 7.dp, vertical = 1.dp)) {
+                    Text(p.name, color = s.goldDeep, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                }
+            }
+        }
+        // you, center
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            SonarAvatar(nick, 52.dp)
+            Spacer(Modifier.height(4.dp))
+            Box(Modifier.clip(RoundedCornerShape(8.dp)).background(s.bg).padding(horizontal = 7.dp, vertical = 1.dp)) {
+                Text("you", color = s.text3, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+}

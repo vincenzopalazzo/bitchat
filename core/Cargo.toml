@@ -1,0 +1,55 @@
+[workspace]
+resolver = "2"
+members = ["sonar-core", "sonar-ffi", "sonar-cli", "sonar-stickers", "sonar-status", "sonar-sim"]
+# Excluded sub-trees, each its own build island so the default `cargo test
+# --workspace` (CI) never touches them:
+#  - vendor/iroh-roq: vendored, iroh-1.0-ported RTP-over-QUIC media layer, a
+#    `calls`-feature path dep of sonar-core (see sonar-core/Cargo.toml).
+#  - sonar-ble: the desktop BLE bridge (own [workspace]) so its
+#    btleplug/CoreBluetooth deps stay out of this workspace.
+exclude = ["vendor/iroh-roq", "sonar-ble"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.85"
+
+# Size-optimized release builds (the staticlib ships inside the iOS app).
+# Kept in the profile (not RUSTFLAGS): `-C lto` via RUSTFLAGS clashes with
+# cargo's `-C embed-bitcode=no` default for dependency crates.
+[profile.release]
+opt-level = "z"
+lto = "thin"
+codegen-units = 1
+
+[workspace.dependencies]
+# Pinned to the SAME MDK git rev White Noise (whitenoise-rs) uses, so the MLS
+# group/welcome/message wire format matches byte-for-byte and White Noise <->
+# Sonar interop works in BOTH directions. The published crates.io 0.8.0 is
+# behind this rev (which adds the v3 Nostr-group-data extension / disappearing
+# messages); our old 0.8.0 could not read White Noise's newer messages. Keep
+# this rev in lockstep with whitenoise-rs's Cargo.toml.
+# `mip04` enables the Encrypted Media module (EncryptedMediaManager) — the
+# Marmot media spec White Noise uses; required for image/file/voice sharing.
+mdk-core = { git = "https://github.com/marmot-protocol/mdk", rev = "e8cd584878be908cb95aad260bb7bca65e017de1", features = ["mip04"] }
+mdk-storage-traits = { git = "https://github.com/marmot-protocol/mdk", rev = "e8cd584878be908cb95aad260bb7bca65e017de1" }
+mdk-memory-storage = { git = "https://github.com/marmot-protocol/mdk", rev = "e8cd584878be908cb95aad260bb7bca65e017de1" }
+mdk-sqlite-storage = { git = "https://github.com/marmot-protocol/mdk", rev = "e8cd584878be908cb95aad260bb7bca65e017de1" }
+nostr = { version = "0.44", features = ["std", "nip44", "nip59"] }
+nostr-sdk = "0.44"
+nostr-relay-builder = "0.44"
+tokio = { version = "1.47", features = ["rt-multi-thread", "macros", "sync", "time"] }
+thiserror = "2"
+hex = "0.4"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+tracing-appender = "0.2.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3.20"
+
+# Accept HTTP 201 Created from Blossom servers (e.g. nostr.download) until upstream
+# nostr-blossom includes the same status handling.
+[patch.crates-io]
+nostr-blossom = { path = "vendor/nostr-blossom" }

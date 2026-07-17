@@ -1,0 +1,39 @@
+MARKETING_VERSION = 1.10.0
+CURRENT_PROJECT_VERSION = 26
+
+IPHONEOS_DEPLOYMENT_TARGET = 16.0
+MACOSX_DEPLOYMENT_TARGET = 15.0
+SWIFT_VERSION = 5.0
+
+// The native Rust dependencies (arti.xcframework, libarti_bitchat.a,
+// libsonar_ffi.a) ship arm64-only slices for macOS. Archives force
+// ONLY_ACTIVE_ARCH=NO and would otherwise try to build the x86_64 slice,
+// failing to link the Arti FFI symbols. macOS is Apple-silicon only here,
+// so exclude x86_64 for the macOS SDK (iOS builds are unaffected).
+EXCLUDED_ARCHS[sdk=macosx*] = x86_64
+
+DEVELOPMENT_TEAM = L3N5LHJD5Y
+CODE_SIGN_STYLE = Automatic
+
+PRODUCT_BUNDLE_IDENTIFIER = sh.hedwig.sonar
+
+APP_GROUP_ID = group.sh.hedwig.sonar
+APS_ENVIRONMENT = production
+
+// Push notification endpoints. These are NOT secrets — the NDS host is public
+// DNS and the transponder npub is a public key — so they ship as committed
+// defaults. Every build (local, CI, TestFlight, all peers) gets them, which is
+// required for offline receive: a peer with no NDS_URL never registers a Breez
+// wakeup webhook and can never be woken to answer a payment.
+//
+// NDS_URL is the BARE HOST: a value containing `//` (e.g. https://host) is
+// truncated to "https:" because `//` starts an xcconfig comment. The app
+// prepends the https:// scheme (SonarPushRegistration.ndsUrl).
+TRANSPONDER_NPUB = npub1606vwj2ztjw8vc9n4ljqgk8phmmq24r8ckt7l42sy97tte0nscqqfdj406
+NDS_URL = nds.sonar.hedwig.sh
+
+// Real secret (Breez API key) + signing team live ONLY in the gitignored
+// Local.xcconfig, included below so local Release builds / archives (TestFlight)
+// pick them up without committing. CI injects BREEZ_API_KEY the same way.
+BREEZ_API_KEY =
+#include? "Local.xcconfig"

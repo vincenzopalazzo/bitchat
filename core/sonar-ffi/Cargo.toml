@@ -1,0 +1,60 @@
+[package]
+name = "sonar-ffi"
+description = "UniFFI bindings for sonar-core (Swift/Kotlin shells)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "sonar_ffi"
+# staticlib for the iOS/macOS xcframework, cdylib (.so) for Android JNI
+# loading, lib so `cargo test` works.
+crate-type = ["staticlib", "cdylib", "lib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[features]
+# Host-only helper used by core/build-ios.sh; never enabled for device builds.
+cli = ["uniffi/cli"]
+# P2P voice calls: exposes the `call_*` SonarNode methods + the ☎CALL signaling
+# helpers, backed by sonar-core's iroh/cpal/opus call engine. The device build
+# scripts (build-ios.sh / build-android.sh) enable this; the default `cargo test`
+# build stays lean (no iroh/cpal/opus). The whole call FFI is `#[cfg]`-gated on it.
+calls-audio = ["sonar-core/calls-audio"]
+
+[dependencies]
+sonar-core = { path = "../sonar-core" }
+sonar-stickers = { path = "../sonar-stickers" }
+uniffi = "0.31"
+nostr.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+hex.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+# `env-filter` for the level directives, `std` + `fmt` + `registry` for the
+# reload handle and layered file/console fmt layers.
+tracing-subscriber = { workspace = true, features = ["env-filter", "std", "fmt", "registry"] }
+tracing-appender.workspace = true
+
+# Android-only: the JNI shim in src/android_jni.rs publishes the JavaVM +
+# Application Context to `ndk_context` so the crates that reach Android system
+# services via JNI (hickory-resolver during iroh Endpoint::bind, cpal/oboe for
+# AAudio) work when this .so is dlopen'd by UniFFI's JNA bindings. Both are
+# already in the dependency tree (pulled by iroh/cpal) — reused, default features.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+ndk-context = "0.1.1"
+
+# Apple-only: tee the core `tracing` events to os_log (subsystem chat.bitchat,
+# category "core") so relay/sync diagnostics show up live in Console.app /
+# idevicesyslog during a repro, alongside the exported file bundle.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+tracing-oslog = "0.3"
+
+[dev-dependencies]
+tempfile.workspace = true

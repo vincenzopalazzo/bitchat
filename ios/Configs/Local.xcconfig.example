@@ -1,0 +1,10 @@
+// Your Apple Developer Team ID - https://stackoverflow.com/a/18727947
+DEVELOPMENT_TEAM = ABC123
+
+// Unique bundle id to be able to register and run locally
+PRODUCT_BUNDLE_IDENTIFIER = chat.bitchat.$(DEVELOPMENT_TEAM)
+
+// Push notification endpoints (NDS_URL, TRANSPONDER_NPUB) are non-secret
+// committed defaults in Release.xcconfig — you do NOT need to set them here.
+// Add BREEZ_API_KEY below (the only real secret).
+// BREEZ_API_KEY = <your Breez API key>

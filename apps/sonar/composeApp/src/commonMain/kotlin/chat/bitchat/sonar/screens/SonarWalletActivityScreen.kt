@@ -1,0 +1,243 @@
+package chat.bitchat.sonar.screens
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import chat.bitchat.sonar.SonarAppState
+import chat.bitchat.sonar.ToastBar
+import chat.bitchat.sonar.payFmt
+import chat.bitchat.sonar.wallet.SonarPaymentActivity
+import chat.bitchat.sonar.wallet.WalletActivityItem
+import chat.bitchat.sonar.wallet.WalletState
+import chat.bitchat.sonar.ui.SNEmptyState
+import chat.bitchat.sonar.ui.SNIcon
+import chat.bitchat.sonar.ui.SNIconName
+import chat.bitchat.sonar.ui.SNNavHeader
+import chat.bitchat.sonar.ui.SNSectionLabel
+import chat.bitchat.sonar.ui.sonar
+
+@Composable
+fun SonarWalletActivityScreen(state: SonarAppState) {
+    val s = sonar
+    // Subscribe to ledger changes so the list recomposes on new entries:
+    // chat ⚡PAY receipts (payVersion) and direct wallet payment activity
+    // (paymentActivityVersion) — both read through state, never the store.
+    state.payVersion
+    state.paymentActivityVersion
+
+    val balanceSats = state.walletBalanceSats()
+    // iOS `hasLiveRate` rule: the fiat subline renders ONLY when a live rate
+    // exists — state.fiatOrNull already returns null otherwise (the
+    // Money.formatFiat live-rate predicate), from the same state.rate snapshot
+    // the rest of this screen uses.
+    val fiat = state.fiatOrNull(balanceSats)
+    // Chat receipts + direct wallet activity, deduped, newest first.
+    val entries = state.walletActivity()
+
+    Column(Modifier.fillMaxSize().background(s.bg)) {
+        SNNavHeader("Wallet", hairline = false, onBack = { state.back() })
+
+        Column(
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                .padding(bottom = 40.dp)
+        ) {
+            // ── Balance card ──
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)
+                    .clip(RoundedCornerShape(20.dp)).background(s.goldSoft)
+                    .padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                SNIcon(SNIconName.Coin, 32.dp, s.goldDeep)
+                Spacer(Modifier.height(10.dp))
+                // pay-big: 42/800 amount with a small 15/700 text3 unit.
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        payFmt(balanceSats),
+                        color = s.text,
+                        fontSize = 42.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = (-0.5).sp,
+                    )
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        "sats",
+                        color = s.text3,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(bottom = 7.dp),
+                    )
+                }
+                if (fiat != null) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(fiat, color = s.text2, fontSize = 14.sp)
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Lightning wallet",
+                    color = s.text3,
+                    fontSize = 12.sp,
+                )
+            }
+
+            // ── Quick actions ──
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // Send button
+                Box(
+                    Modifier.weight(1f).height(48.dp)
+                        .clip(RoundedCornerShape(999.dp)).background(s.goldFill)
+                        .clickable { state.toast = "Open a chat to send or receive bitcoin" },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        SNIcon(SNIconName.Bolt, 18.dp, s.onGold)
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "Send",
+                            color = s.onGold,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+                // Receive button
+                Box(
+                    Modifier.weight(1f).height(48.dp)
+                        .clip(RoundedCornerShape(999.dp)).background(s.surface)
+                        .clickable { state.toast = "Open a chat to send or receive bitcoin" },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        SNIcon(SNIconName.Coin, 18.dp, s.text)
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "Receive",
+                            color = s.text,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+            }
+
+            // ── Activity section ──
+            SNSectionLabel("Activity")
+
+            if (entries.isEmpty()) {
+                SNEmptyState(
+                    icon = SNIconName.Activity,
+                    title = "No activity yet",
+                    desc = "Send or receive bitcoin in any chat to see your transaction history here.",
+                )
+            } else {
+                Column(Modifier.fillMaxWidth()) {
+                    entries.forEach { entry ->
+                        ActivityRow(entry, state)
+                    }
+                }
+            }
+        }
+    }
+
+    state.toast?.let { ToastBar(it) { state.toast = null } }
+}
+
+@Composable
+private fun ActivityRow(entry: WalletActivityItem, state: SonarAppState) {
+    val s = sonar
+    val sent = entry.sent
+    val icon = if (sent) SNIconName.Bolt else SNIconName.Coin
+
+    // iOS SonarWalletActivityScreen.activityRow: Completed/Pending/Failed.
+    val statusLabel = when (entry.status) {
+        SonarPaymentActivity.Status.Paid -> "Completed"
+        SonarPaymentActivity.Status.Pending -> "Pending"
+        SonarPaymentActivity.Status.Failed -> "Failed"
+    }
+    val statusColor = when (entry.status) {
+        SonarPaymentActivity.Status.Paid -> s.green
+        SonarPaymentActivity.Status.Pending -> s.goldDeep
+        SonarPaymentActivity.Status.Failed -> s.danger
+    }
+
+    val amountPrefix = if (sent) "" else "+"
+    val amountColor = if (sent) s.text else s.green
+    val fiat = state.fiatOrNull(entry.sats)
+
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Icon tile
+        Box(
+            Modifier.size(38.dp).clip(RoundedCornerShape(11.dp)).background(s.goldSoft),
+            contentAlignment = Alignment.Center,
+        ) {
+            SNIcon(icon, 18.dp, s.goldDeep)
+        }
+        Spacer(Modifier.width(12.dp))
+
+        // Title + status
+        Column(Modifier.weight(1f)) {
+            Text(
+                if (sent) "Sent" else "Received",
+                color = s.text,
+                fontSize = 15.5.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    statusLabel,
+                    color = statusColor,
+                    fontSize = 12.5.sp,
+                )
+                Text(
+                    " · Lightning",
+                    color = s.text3,
+                    fontSize = 12.5.sp,
+                )
+            }
+        }
+
+        // Amount + fiat
+        Column(horizontalAlignment = Alignment.End) {
+            Text(
+                "$amountPrefix${payFmt(entry.sats)} sats",
+                color = amountColor,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            if (fiat != null) {
+                Text(
+                    fiat,
+                    color = s.text3,
+                    fontSize = 12.sp,
+                )
+            }
+        }
+    }
+}
