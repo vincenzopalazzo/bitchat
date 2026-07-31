@@ -116,21 +116,36 @@ final class BitchatFilePacketTests: XCTestCase {
         XCTAssertEqual(decoded.content, content)
     }
 
-    /// Same contract for an extension that trails the content, which a decoder
-    /// stopping at the first unknown tag would also lose.
+    /// Same contract for an extension that trails the content. The unknown tag
+    /// also sits *between* two content chunks: a decoder that treats content as
+    /// the terminal field (or stops at the unknown tag) reassembles only the
+    /// first chunk and fails the content assertion, so this cannot pass under a
+    /// stop-at-content decoder.
     func testDecodeSkipsAnUnknownTLVTrailingTheContent() throws {
-        let content = Data(repeating: 0x7F, count: 16)
+        let firstChunk = Data(repeating: 0x7F, count: 16)
+        let secondChunk = Data(repeating: 0x33, count: 8)
+        let content = firstChunk + secondChunk
         var data = Data()
 
         data.append(0x01)
         data.append(contentsOf: [0x00, 0x08])
         data.append(Data("note.m4a".utf8))
+        // content, chunk 1
         data.append(0x04)
-        data.append(contentsOf: [0x00, 0x00, 0x00, UInt8(content.count)])
-        data.append(content)
+        data.append(contentsOf: [0x00, 0x00, 0x00, UInt8(firstChunk.count)])
+        data.append(firstChunk)
+        // unknown tag mid-stream, between content chunks
         data.append(0x7F)
         data.append(contentsOf: [0x00, 0x04])
         data.append(Data([0x11, 0x11, 0x11, 0x11]))
+        // content, chunk 2
+        data.append(0x04)
+        data.append(contentsOf: [0x00, 0x00, 0x00, UInt8(secondChunk.count)])
+        data.append(secondChunk)
+        // unknown tag trailing the content
+        data.append(0x7E)
+        data.append(contentsOf: [0x00, 0x02])
+        data.append(Data([0x22, 0x22]))
 
         let decoded = try XCTUnwrap(BitchatFilePacket.decode(data))
         XCTAssertEqual(decoded.fileName, "note.m4a")
